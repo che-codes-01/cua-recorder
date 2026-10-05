@@ -1,29 +1,29 @@
 #!/usr/bin/env node
-// ─── cua-record ─────────────────────────────────────────────────────────────
+// ─── cua-record ────────────────────────────────────────────────────────────────
 //
-// Usage:  npx cua-record [--out workflow.json] [--name "My workflow"] [--port 7842]
+// Usage:  npx cua-record [--out workflow.json] [--name "My workflow"]
 //
-// Opens a browser-based recorder UI (like Playwright's codegen).
-// The Python backend streams events via Server-Sent Events.
+// Brings up a terminal HUD. Press R to start recording, S to stop,
+// W to save the workflow JSON, Q to quit.
 //
-import http                            from 'http';
-import fs                              from 'fs';
-import path                            from 'path';
-import crypto                          from 'crypto';
-import { spawn, ChildProcess }         from 'child_process';
-import { createInterface }             from 'readline';
-import { execSync }                    from 'child_process';
-import open                            from 'open';
+// The recorder spawns cua_recorder.py which uses pynput to capture
+// global mouse + keyboard events and streams them as JSON action objects.
+//
+import blessed            from 'blessed';
+import { spawn, ChildProcess } from 'child_process';
+import { createInterface }     from 'readline';
+import fs                      from 'fs';
+import path                    from 'path';
+import crypto                  from 'crypto';
+import { execSync }            from 'child_process';
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 
-const args     = process.argv.slice(2);
-const outArg   = args.indexOf('--out');
-const nameArg  = args.indexOf('--name');
-const portArg  = args.indexOf('--port');
-const outFile  = outArg  !== -1 ? args[outArg  + 1] : null;
-const wfName   = nameArg !== -1 ? args[nameArg + 1] : 'Recorded Workflow';
-const PORT     = portArg !== -1 ? parseInt(args[portArg + 1], 10) : 7842;
+const args    = process.argv.slice(2);
+const outArg  = args.indexOf('--out');
+const nameArg = args.indexOf('--name');
+const outFile = outArg  !== -1 ? args[outArg  + 1] : null;
+const wfName  = nameArg !== -1 ? args[nameArg + 1] : 'Recorded Workflow';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -37,21 +37,11 @@ type ActionNode = {
 
 type WFEdge = { id: string; from: string; to: string };
 
-// ── State ─────────────────────────────────────────────────────────────────────
+// ── Recorded actions ──────────────────────────────────────────────────────────
 
 let actions:   Record<string, unknown>[] = [];
 let recording  = false;
-
-// ── SSE clients ───────────────────────────────────────────────────────────────
-
-const sseClients = new Set<http.ServerResponse>();
-
-function broadcast(event: string, data: unknown): void {
-  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const res of sseClients) {
-    try { res.write(payload); } catch { sseClients.delete(res); }
-  }
-}
+let saved      = false;
 
 // ── Python process ────────────────────────────────────────────────────────────
 
@@ -77,6 +67,7 @@ function buildWorkflow(): object {
   const nodes: ActionNode[] = [];
   const edges: WFEdge[]     = [];
 
+  // Trigger node
   const triggerId = crypto.randomUUID();
   nodes.push({
     id:       triggerId,
@@ -86,6 +77,7 @@ function buildWorkflow(): object {
     params:   {},
   });
 
+  // Action nodes — laid out left-to-right in a horizontal chain
   let prevId = triggerId;
   actions.forEach((action, i) => {
     const type   = action.type as string;
@@ -110,93 +102,127 @@ function buildWorkflow(): object {
   };
 }
 
-// ── HTTP server ───────────────────────────────────────────────────────────────
+// ── Save workflow ─────────────────────────────────────────────────────────────
 
-const uiPath = path.resolve(__dirname, 'ui.html');
+function saveWorkflow(): string {
+  const wf   = buildWorkflow();
+  const dest = outFile ?? `workflow-${Date.now()}.json`;
+  fs.writeFileSync(dest, JSON.stringify(wf, null, 2), 'utf-8');
+  saved = true;
+  return path.resolve(dest);
+}
 
-const server = http.createServer((req, res) => {
-  const url = req.url ?? '/';
+// ── Blessed TUI ───────────────────────────────────────────────────────────────
 
-  // ── GET / → serve UI ──────────────────────────────────────────────────────
-  if (req.method === 'GET' && url === '/') {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(fs.readFileSync(uiPath, 'utf-8'));
-    return;
-  }
+const screen = blessed.screen({
+  smartCSR:  true,
+  title:     'cua-record',
+  fullUnicode: true,
+});
 
-  // ── GET /events → SSE stream ──────────────────────────────────────────────
-  if (req.method === 'GET' && url === '/events') {
-    res.writeHead(200, {
-      'Content-Type':  'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection':    'keep-alive',
-      'Access-Control-Allow-Origin': '*',
-    });
-    res.write(':ok\n\n');
-    // Send current state immediately
-    res.write(`event: init\ndata: ${JSON.stringify({ actions, recording, wfName })}\n\n`);
-    sseClients.add(res);
-    req.on('close', () => sseClients.delete(res));
-    return;
-  }
+// ── Layout ─────────────────────────────────────────────────────────────────────
 
-  // ── POST /control { cmd: "start"|"stop"|"clear" } ─────────────────────────
-  if (req.method === 'POST' && url === '/control') {
-    let body = '';
-    req.on('data', d => (body += d));
-    req.on('end', () => {
-      try {
-        const { cmd } = JSON.parse(body) as { cmd: string };
-        if (cmd === 'start') {
-          actions   = [];
-          recording = true;
-          sendCmd('start');
-          broadcast('status', { recording: true, actions: [] });
-        } else if (cmd === 'stop') {
-          recording = false;
-          sendCmd('stop');
-          broadcast('status', { recording: false, actions });
-        } else if (cmd === 'clear') {
-          actions   = [];
-          recording = false;
-          sendCmd('stop');
-          broadcast('status', { recording: false, actions: [] });
-        }
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true }));
-      } catch {
-        res.writeHead(400); res.end('bad request');
-      }
-    });
-    return;
-  }
+const header = blessed.box({
+  top: 0, left: 0, width: '100%', height: 3,
+  content: ' {bold}{cyan-fg}cua-record{/cyan-fg}{/bold}  —  Record mouse + keyboard → CUA workflow JSON',
+  tags: true,
+  border: { type: 'line' },
+  style: { border: { fg: '#333' }, bg: '#0d0d0d', fg: '#fff' },
+});
 
-  // ── POST /save → write file, return JSON ─────────────────────────────────
-  if (req.method === 'POST' && url === '/save') {
-    let body = '';
-    req.on('data', d => (body += d));
-    req.on('end', () => {
-      try {
-        const wf   = buildWorkflow();
-        const dest = outFile ?? `workflow-${Date.now()}.json`;
-        fs.writeFileSync(dest, JSON.stringify(wf, null, 2), 'utf-8');
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, file: path.resolve(dest), workflow: wf }));
-      } catch (e) {
-        res.writeHead(500); res.end(String(e));
-      }
-    });
-    return;
-  }
+const statusBox = blessed.box({
+  top: 3, left: 0, width: '100%', height: 3,
+  tags: true,
+  border: { type: 'line' },
+  style: { border: { fg: '#333' }, bg: '#0d0d0d' },
+});
 
-  // ── GET /workflow → return current workflow JSON ──────────────────────────
-  if (req.method === 'GET' && url === '/workflow') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(buildWorkflow(), null, 2));
-    return;
-  }
+const log = blessed.log({
+  top: 6, left: 0, width: '100%', height: '50%',
+  label: ' Actions ',
+  tags: true,
+  border: { type: 'line' },
+  style: { border: { fg: '#333' }, bg: '#0d0d0d', fg: '#888' },
+  scrollable: true,
+  alwaysScroll: true,
+  scrollbar: { ch: '│', style: { fg: '#444' } },
+});
 
-  res.writeHead(404); res.end('not found');
+const help = blessed.box({
+  bottom: 0, left: 0, width: '100%', height: 3,
+  tags: true,
+  border: { type: 'line' },
+  style: { border: { fg: '#222' }, bg: '#0d0d0d', fg: '#555' },
+  content: '  {bold}R{/bold} Record   {bold}S{/bold} Stop   {bold}W{/bold} Save JSON   {bold}C{/bold} Clear   {bold}Q{/bold} / {bold}Ctrl+C{/bold} Quit',
+});
+
+screen.append(header);
+screen.append(statusBox);
+screen.append(log);
+screen.append(help);
+
+function setStatus(state: 'idle' | 'recording' | 'stopped' | 'saved'): void {
+  const map: Record<string, string> = {
+    idle:      ' {white-fg}●{/white-fg}  Idle — press {bold}R{/bold} to start recording',
+    recording: ' {red-fg}{bold}⏺  RECORDING{/bold}{/red-fg}  — press {bold}S{/bold} to stop  ({bold}' + actions.length + '{/bold} actions)',
+    stopped:   ' {yellow-fg}■  Stopped{/yellow-fg}  — {bold}' + actions.length + '{/bold} actions captured — press {bold}W{/bold} to save or {bold}R{/bold} to re-record',
+    saved:     ' {green-fg}✓  Saved{/green-fg}  — {bold}' + actions.length + '{/bold} actions  — press {bold}Q{/bold} to quit or {bold}R{/bold} to record more',
+  };
+  statusBox.setContent(map[state]);
+  screen.render();
+}
+
+function logAction(action: Record<string, unknown>, index: number): void {
+  const type = action.type as string;
+  const colorMap: Record<string, string> = {
+    left_click: 'blue-fg', double_click: 'cyan-fg', right_click: 'magenta-fg',
+    type: 'green-fg', key: 'yellow-fg', hotkey: 'yellow-fg',
+    scroll: 'white-fg',
+  };
+  const col  = colorMap[type] ?? 'white-fg';
+  const num  = String(index + 1).padStart(3, ' ');
+  const args = Object.entries(action)
+    .filter(([k]) => k !== 'type')
+    .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+    .join('  ');
+  log.log(` {white-fg}${num}{/white-fg}  {${col}}{bold}${humanise(type)}{/bold}{/${col}}  {#555-fg}${args}{/#555-fg}`);
+}
+
+// ── Keyboard bindings ─────────────────────────────────────────────────────────
+
+screen.key(['r', 'R'], () => {
+  actions   = [];
+  recording = true;
+  saved     = false;
+  log.setContent('');
+  sendCmd('start');
+  setStatus('recording');
+});
+
+screen.key(['s', 'S'], () => {
+  if (!recording) return;
+  recording = false;
+  sendCmd('stop');
+  setStatus('stopped');
+});
+
+screen.key(['w', 'W'], () => {
+  if (!actions.length) return;
+  const dest = saveWorkflow();
+  log.log(` {green-fg}✓ Saved → ${dest}{/green-fg}`);
+  setStatus('saved');
+});
+
+screen.key(['c', 'C'], () => {
+  actions = [];
+  log.setContent('');
+  setStatus(recording ? 'recording' : 'idle');
+});
+
+screen.key(['q', 'Q', 'C-c'], () => {
+  sendCmd('stop');
+  if (pyProc) pyProc.kill();
+  process.exit(0);
 });
 
 // ── Spawn Python recorder ─────────────────────────────────────────────────────
@@ -215,64 +241,91 @@ function spawnRecorder(): void {
     catch { return; }
 
     if (msg.ready) {
-      broadcast('ready', {});
+      setStatus('idle');
       return;
     }
+
     if (msg.error) {
-      broadcast('error', { message: msg.error });
+      log.log(` {red-fg}Error: ${msg.error}{/red-fg}`);
+      screen.render();
       return;
     }
-    if (msg.text_tick) return;
-    if (msg.status) {
-      broadcast('status', { recording: msg.status === 'recording', actions });
+
+    if (msg.status === 'recording') {
+      setStatus('recording');
       return;
     }
+
+    if (msg.status === 'stopped') {
+      setStatus('stopped');
+      return;
+    }
+
+    // text_tick — flush handled implicitly by stop / next non-char event
+    if (msg.text_tick) {
+      return;
+    }
+
+    // Action event
     if (msg.event) {
       const action = msg.event as Record<string, unknown>;
       actions.push(action);
-      broadcast('action', { action, index: actions.length - 1, total: actions.length });
-      broadcast('status', { recording, actions });
+      logAction(action, actions.length - 1);
+      // Keep status count fresh while recording
+      if (recording) setStatus('recording');
+      return;
     }
   });
 
   pyProc.stderr!.on('data', (chunk: Buffer) => {
     const text = chunk.toString().trim();
-    if (text) broadcast('log', { text });
+    if (text) {
+      log.log(` {#666-fg}[py] ${text}{/#666-fg}`);
+      screen.render();
+    }
   });
 
   pyProc.on('close', (code) => {
-    if (code !== 0) broadcast('error', { message: `Recorder process exited (code ${code})` });
+    if (code !== 0) {
+      log.log(` {red-fg}Recorder process exited (code ${code}){/red-fg}`);
+      screen.render();
+    }
   });
 
   pyProc.on('error', (err) => {
-    broadcast('error', { message: `Failed to start recorder: ${err.message}. Make sure python3 and pynput are installed.` });
+    log.log(` {red-fg}Failed to start recorder: ${err.message}{/red-fg}`);
+    log.log(` {yellow-fg}Make sure python3 and pynput are installed: pip3 install pynput{/yellow-fg}`);
+    screen.render();
   });
 }
 
-// ── Check / install pynput ────────────────────────────────────────────────────
+// ── Check pynput is installed ─────────────────────────────────────────────────
 
 function checkDeps(): boolean {
-  try { execSync('python3 -c "import pynput"', { stdio: 'ignore' }); return true; }
-  catch { return false; }
+  try {
+    execSync('python3 -c "import pynput"', { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
+screen.render();
+setStatus('idle');
+statusBox.setContent(' {yellow-fg}Checking dependencies…{/yellow-fg}');
+screen.render();
+
 if (!checkDeps()) {
-  console.log('Installing pynput…');
-  try { execSync('pip3 install pynput --break-system-packages', { stdio: 'inherit' }); }
-  catch { console.error('Failed to install pynput. Run: pip3 install pynput'); }
+  statusBox.setContent(' {red-fg}pynput not found. Installing…{/red-fg}');
+  screen.render();
+  try {
+    execSync('pip3 install pynput --break-system-packages', { stdio: 'inherit' });
+  } catch {
+    log.log('{red-fg}Failed to install pynput. Please run: pip3 install pynput{/red-fg}');
+    screen.render();
+  }
 }
 
 spawnRecorder();
-
-server.listen(PORT, '127.0.0.1', () => {
-  const url = `http://127.0.0.1:${PORT}`;
-  console.log(`\n  cua-record  →  ${url}\n`);
-  open(url).catch(() => {
-    console.log(`  Open your browser at ${url}`);
-  });
-});
-
-process.on('SIGINT',  () => { sendCmd('stop'); if (pyProc) pyProc.kill(); process.exit(0); });
-process.on('SIGTERM', () => { sendCmd('stop'); if (pyProc) pyProc.kill(); process.exit(0); });

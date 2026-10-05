@@ -1,8 +1,6 @@
 # cua-record
 
-A **browser-based visual recorder** for CUA workflows — like Playwright's codegen, but for CUA.
-
-Run it locally, click **Record**, interact with your screen (mouse clicks, keyboard, scroll), click **Stop**, then **Save JSON** — the workflow file is ready to import into the CUA editor.
+A Playwright-style recorder for CUA workflows. Run it locally, press **R** to start recording your mouse + keyboard, press **S** to stop, press **W** to save — outputs a workflow JSON you can import directly into the CUA editor.
 
 ## Quick start (from GitHub — no install needed)
 
@@ -13,25 +11,10 @@ npx --yes github:che-codes-01/cua-recorder
 With options:
 
 ```bash
-# Save to a specific file
 npx --yes github:che-codes-01/cua-recorder --out my-workflow.json
-
-# Custom workflow name
 npx --yes github:che-codes-01/cua-recorder --name "Open SAP and search"
-
-# Custom port (default: 7842)
-npx --yes github:che-codes-01/cua-recorder --port 8080
+npx --yes github:che-codes-01/cua-recorder --out sap-search.json --name "SAP Stock Search"
 ```
-
-The command opens a recorder window in your default browser automatically.
-
----
-
-## What it looks like
-
-A toolbar across the top with **Record ▶**, **Stop ■**, **Clear**, and **Save JSON** buttons — plus a live scrolling list of every captured action with type, colour-coding, and parameters.
-
----
 
 ## Requirements
 
@@ -41,20 +24,16 @@ A toolbar across the top with **Record ▶**, **Stop ■**, **Clear**, and **Sav
 > **macOS:** Grant **Accessibility** and **Input Monitoring** permissions to Terminal (or your terminal app) in  
 > System Preferences → Privacy & Security → Accessibility / Input Monitoring.
 
----
-
 ## Local install / dev
 
 ```bash
 cd packages/recorder
 npm install
-npm run build   # compiles TypeScript + copies ui.html → dist/
+npm run build
 npm start
 ```
 
----
-
-## Keyboard shortcuts (inside the recorder browser window)
+## Keyboard shortcuts (inside the HUD)
 
 | Key | Action |
 |-----|--------|
@@ -62,9 +41,7 @@ npm start
 | **S** | Stop recording |
 | **W** | Save workflow JSON |
 | **C** | Clear recorded actions |
-| **Esc** | Close JSON preview modal |
-
----
+| **Q** / Ctrl+C | Quit |
 
 ## What gets recorded
 
@@ -73,16 +50,14 @@ npm start
 | Left click | `left_click` |
 | Double click | `double_click` |
 | Right click | `right_click` |
-| Consecutive typing | `type` (collapsed) |
+| Consecutive typing | `type` (collapsed into one node) |
 | Special key (Enter, Tab, Esc…) | `key` |
 | Modifier combo (⌘C, ⌘V…) | `hotkey` |
 | Scroll wheel | `scroll` |
 
----
-
 ## Output format
 
-The saved JSON is a standard CUA workflow importable via the editor's **Import** button:
+The saved JSON is a standard CUA workflow file importable via the editor's **Import** button:
 
 ```json
 {
@@ -90,12 +65,13 @@ The saved JSON is a standard CUA workflow importable via the editor's **Import**
   "name": "My Workflow",
   "nodes": {
     "nodes": [
-      { "id": "...", "type": "webhook_trigger", "name": "Webhook Trigger", "params": {} },
-      { "id": "...", "type": "left_click",      "name": "Left Click",      "params": { "coordinate": [320, 240] } },
-      { "id": "...", "type": "type",             "name": "Type",            "params": { "text": "hello world" } }
+      { "id": "...", "type": "webhook_trigger", ... },
+      { "id": "...", "type": "left_click", "params": { "coordinate": [320, 240] }, ... },
+      { "id": "...", "type": "type",       "params": { "text": "hello world" }, ... }
     ],
     "edges": [
-      { "id": "...", "from": "...", "to": "..." }
+      { "id": "...", "from": "trigger-id", "to": "node-2-id" },
+      ...
     ]
   }
 }
