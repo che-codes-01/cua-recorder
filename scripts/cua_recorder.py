@@ -85,7 +85,7 @@ DRAG_THRESHOLD  = 5      # pixels
 # Auto-wait insertion — if the user pauses > this many seconds between
 # actions, insert a wait node so the workflow replays the same pacing.
 # Caps at MAX_AUTO_WAIT so a long coffee break doesn't produce a 5-min wait.
-AUTO_WAIT_THRESHOLD = 1.5   # seconds — gaps shorter than this are ignored
+AUTO_WAIT_THRESHOLD = 0.5   # seconds — gaps shorter than this are ignored
 MAX_AUTO_WAIT       = 5.0   # seconds — longest wait node we'll ever insert
 last_event_ts: float = 0.0  # timestamp of the last emitted event
 
@@ -109,10 +109,15 @@ def emit_event(action: dict) -> None:
 # ── Text flusher ───────────────────────────────────────────────────────────────
 
 def flush_pending_text() -> None:
-    global pending_text, pending_text_ts
+    global pending_text, pending_text_ts, last_event_ts
     with lock:
         if pending_text:
+            ts = pending_text_ts   # when the last char was typed
             emit_event({"type": "type", "text": pending_text})
+            # Backdate last_event_ts to when the last char was typed,
+            # not now — so the gap to the *next* action (e.g. Enter)
+            # reflects how long the user actually paused after typing.
+            last_event_ts = ts
             pending_text    = ""
             pending_text_ts = 0.0
 
