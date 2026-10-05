@@ -177,7 +177,7 @@ function logAction(action: Record<string, unknown>, index: number): void {
   const colorMap: Record<string, string> = {
     left_click: 'blue-fg', double_click: 'cyan-fg', right_click: 'magenta-fg',
     type: 'green-fg', key: 'yellow-fg', hotkey: 'yellow-fg',
-    scroll: 'white-fg',
+    scroll: 'white-fg', wait: 'magenta-fg',
   };
   const col  = colorMap[type] ?? 'white-fg';
   const num  = String(index + 1).padStart(3, ' ');

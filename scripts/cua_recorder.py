@@ -82,6 +82,13 @@ drag_start_pos  = None
 drag_start_time = 0.0
 DRAG_THRESHOLD  = 5      # pixels
 
+# Auto-wait insertion — if the user pauses > this many seconds between
+# actions, insert a wait node so the workflow replays the same pacing.
+# Caps at MAX_AUTO_WAIT so a long coffee break doesn't produce a 5-min wait.
+AUTO_WAIT_THRESHOLD = 1.5   # seconds — gaps shorter than this are ignored
+MAX_AUTO_WAIT       = 5.0   # seconds — longest wait node we'll ever insert
+last_event_ts: float = 0.0  # timestamp of the last emitted event
+
 # ── Output helper ──────────────────────────────────────────────────────────────
 
 def emit(obj: dict) -> None:
@@ -89,6 +96,14 @@ def emit(obj: dict) -> None:
     sys.stdout.flush()
 
 def emit_event(action: dict) -> None:
+    global last_event_ts
+    now = time.time()
+    if last_event_ts > 0:
+        gap = now - last_event_ts
+        if gap >= AUTO_WAIT_THRESHOLD:
+            wait_secs = round(min(gap, MAX_AUTO_WAIT), 2)
+            emit({"event": {"type": "wait", "duration": wait_secs}})
+    last_event_ts = now
     emit({"event": action})
 
 # ── Text flusher ───────────────────────────────────────────────────────────────
@@ -232,11 +247,12 @@ def on_key_release(key) -> None:
 # ── Listener lifecycle ─────────────────────────────────────────────────────────
 
 def start_recording() -> None:
-    global recording, mouse_listener, kbd_listener, pressed_mods
+    global recording, mouse_listener, kbd_listener, pressed_mods, last_event_ts
     if recording:
         return
     with lock:
-        pressed_mods = set()
+        pressed_mods  = set()
+    last_event_ts = 0.0
     recording       = True
     mouse_listener  = mouse.Listener(on_click=on_click, on_scroll=on_scroll)
     kbd_listener    = keyboard.Listener(on_press=on_key_press, on_release=on_key_release)
