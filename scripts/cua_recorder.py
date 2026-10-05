@@ -57,7 +57,7 @@ SPECIAL_KEY_NAMES = {
     keyboard.Key.backspace:  "backspace",
     keyboard.Key.delete:     "delete",
     keyboard.Key.esc:        "escape",
-    keyboard.Key.space:      "space",
+    # space is handled as a printable character (accumulated into type nodes)
     keyboard.Key.up:         "up",
     keyboard.Key.down:       "down",
     keyboard.Key.left:       "left",
@@ -171,11 +171,22 @@ def on_key_press(key) -> None:
         return
 
     # Special key with active modifiers → hotkey
+    # Exception: Shift + printable char is just the uppercase char, not a hotkey
     special = SPECIAL_KEY_NAMES.get(key)
     char    = getattr(key, "char", None)
 
     with lock:
         active_mods = set(pressed_mods)
+
+    # Shift alone + a printable char → the char already carries the right case;
+    # accumulate it as text rather than emitting a hotkey node.
+    shift_only = active_mods == {"shift"}
+    if shift_only and char and not special:
+        with lock:
+            pending_text    += char
+            pending_text_ts  = time.time()
+        emit({"text_tick": True})
+        return
 
     if active_mods and (special or char):
         flush_pending_text()
@@ -187,7 +198,15 @@ def on_key_press(key) -> None:
             emit_event({"type": "hotkey", "keys": combo})
         return
 
-    # Special key (no modifiers) → key node
+    # Space → treat as printable so it stays inside the text buffer
+    if key == keyboard.Key.space:
+        with lock:
+            pending_text    += " "
+            pending_text_ts  = time.time()
+        emit({"text_tick": True})
+        return
+
+    # Other special key (no modifiers) → key node
     if special:
         flush_pending_text()
         emit_event({"type": "key", "text": special})
@@ -198,7 +217,6 @@ def on_key_press(key) -> None:
         with lock:
             pending_text    += char
             pending_text_ts  = time.time()
-        # Emit a text-tick so TS side knows to start a flush timer
         emit({"text_tick": True})
         return
 
