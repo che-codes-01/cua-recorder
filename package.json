@@ -1,28 +1,28 @@
 {
   "name": "cua-recorder",
-  "version": "1.0.0",
-  "description": "Record mouse + keyboard actions on your local machine and export a CUA workflow JSON",
+  "version": "1.1.0",
+  "description": "Browser-based recorder for CUA workflows — record mouse + keyboard, export workflow JSON",
   "bin": {
     "cua-record": "dist/index.js"
   },
   "files": [
     "dist/",
+    "src/ui.html",
     "scripts/",
     "README.md"
   ],
   "scripts": {
-    "dev":   "tsx src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js"
+    "dev":       "tsx src/index.ts",
+    "build":     "tsc",
+    "postbuild": "node -e \"require('fs').copyFileSync('src/ui.html', 'dist/ui.html')\"",
+    "start":     "node dist/index.js"
   },
   "dependencies": {
-    "blessed":  "^0.1.81",
-    "open":     "^10.1.0"
+    "open": "^10.1.0"
   },
   "devDependencies": {
-    "@types/blessed": "^0.1.25",
-    "@types/node":    "^20.14.0",
-    "tsx":            "^4.15.0",
-    "typescript":     "^5.4.5"
+    "@types/node": "^20.14.0",
+    "tsx":         "^4.15.0",
+    "typescript":  "^5.4.5"
   }
 }

@@ -1,48 +1,60 @@
 # cua-record
 
-A Playwright-style recorder for CUA workflows. Run it locally, press **R** to start recording your mouse + keyboard, press **S** to stop, press **W** to save — outputs a workflow JSON you can import directly into the CUA editor.
+A **browser-based visual recorder** for CUA workflows — like Playwright's codegen, but for CUA.
 
-## Install
+Run it locally, click **Record**, interact with your screen (mouse clicks, keyboard, scroll), click **Stop**, then **Save JSON** — the workflow file is ready to import into the CUA editor.
+
+## Quick start (from GitHub — no install needed)
+
+```bash
+npx --yes github:che-codes-01/cua-recorder
+```
+
+With options:
+
+```bash
+# Save to a specific file
+npx --yes github:che-codes-01/cua-recorder --out my-workflow.json
+
+# Custom workflow name
+npx --yes github:che-codes-01/cua-recorder --name "Open SAP and search"
+
+# Custom port (default: 7842)
+npx --yes github:che-codes-01/cua-recorder --port 8080
+```
+
+The command opens a recorder window in your default browser automatically.
+
+---
+
+## What it looks like
+
+A toolbar across the top with **Record ▶**, **Stop ■**, **Clear**, and **Save JSON** buttons — plus a live scrolling list of every captured action with type, colour-coding, and parameters.
+
+---
+
+## Requirements
+
+- Node.js 18+
+- Python 3 + `pynput` (auto-installed on first run)
+
+> **macOS:** Grant **Accessibility** and **Input Monitoring** permissions to Terminal (or your terminal app) in  
+> System Preferences → Privacy & Security → Accessibility / Input Monitoring.
+
+---
+
+## Local install / dev
 
 ```bash
 cd packages/recorder
 npm install
-npm run build
+npm run build   # compiles TypeScript + copies ui.html → dist/
+npm start
 ```
 
-Or install globally via npx from the repo root:
+---
 
-```bash
-npm run build --workspace=packages/recorder
-npx --prefix packages/recorder cua-record
-```
-
-Requires Python 3 + pynput (auto-installed on first run):
-
-```bash
-pip3 install pynput
-```
-
-> **macOS:** You must grant **Accessibility** and **Input Monitoring** permissions to Terminal (or your terminal app) in  
-> System Preferences → Privacy & Security → Accessibility / Input Monitoring.
-
-## Usage
-
-```bash
-# Basic — saves to workflow-<timestamp>.json
-cua-record
-
-# Custom output file
-cua-record --out my-workflow.json
-
-# Custom workflow name (shown in editor)
-cua-record --name "Open Brave and search SAP"
-
-# Both
-cua-record --out sap-search.json --name "SAP Stock Search"
-```
-
-## Keyboard shortcuts (inside the recorder HUD)
+## Keyboard shortcuts (inside the recorder browser window)
 
 | Key | Action |
 |-----|--------|
@@ -50,7 +62,9 @@ cua-record --out sap-search.json --name "SAP Stock Search"
 | **S** | Stop recording |
 | **W** | Save workflow JSON |
 | **C** | Clear recorded actions |
-| **Q** / Ctrl+C | Quit |
+| **Esc** | Close JSON preview modal |
+
+---
 
 ## What gets recorded
 
@@ -59,14 +73,16 @@ cua-record --out sap-search.json --name "SAP Stock Search"
 | Left click | `left_click` |
 | Double click | `double_click` |
 | Right click | `right_click` |
-| Consecutive typing | `type` (collapsed into one node) |
+| Consecutive typing | `type` (collapsed) |
 | Special key (Enter, Tab, Esc…) | `key` |
 | Modifier combo (⌘C, ⌘V…) | `hotkey` |
 | Scroll wheel | `scroll` |
 
+---
+
 ## Output format
 
-The saved JSON is a standard CUA workflow file importable via the editor's **Import** button:
+The saved JSON is a standard CUA workflow importable via the editor's **Import** button:
 
 ```json
 {
@@ -74,13 +90,12 @@ The saved JSON is a standard CUA workflow file importable via the editor's **Imp
   "name": "My Workflow",
   "nodes": {
     "nodes": [
-      { "id": "...", "type": "webhook_trigger", ... },
-      { "id": "...", "type": "left_click", "params": { "coordinate": [320, 240] }, ... },
-      { "id": "...", "type": "type",       "params": { "text": "hello world" }, ... }
+      { "id": "...", "type": "webhook_trigger", "name": "Webhook Trigger", "params": {} },
+      { "id": "...", "type": "left_click",      "name": "Left Click",      "params": { "coordinate": [320, 240] } },
+      { "id": "...", "type": "type",             "name": "Type",            "params": { "text": "hello world" } }
     ],
     "edges": [
-      { "id": "...", "from": "trigger-id", "to": "node-2-id" },
-      ...
+      { "id": "...", "from": "...", "to": "..." }
     ]
   }
 }
