@@ -203,6 +203,19 @@ def on_key_press(key) -> None:
         emit({"text_tick": True})
         return
 
+    # Space with modifiers (e.g. cmd+space) → hotkey; space alone → printable
+    if key == keyboard.Key.space:
+        if active_mods:
+            flush_pending_text()
+            combo = sorted(active_mods) + ["space"]
+            emit_event({"type": "hotkey", "keys": combo})
+        else:
+            with lock:
+                pending_text    += " "
+                pending_text_ts  = time.time()
+            emit({"text_tick": True})
+        return
+
     if active_mods and (special or char):
         flush_pending_text()
         key_name  = special or char
@@ -211,14 +224,6 @@ def on_key_press(key) -> None:
             emit_event({"type": "key", "text": combo[0]})
         else:
             emit_event({"type": "hotkey", "keys": combo})
-        return
-
-    # Space → treat as printable so it stays inside the text buffer
-    if key == keyboard.Key.space:
-        with lock:
-            pending_text    += " "
-            pending_text_ts  = time.time()
-        emit({"text_tick": True})
         return
 
     # Other special key (no modifiers) → key node
